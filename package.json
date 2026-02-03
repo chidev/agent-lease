@@ -7,7 +7,7 @@
     "agent-lease": "./bin/agent-lease.js"
   },
   "scripts": {
-    "test": "node test/test.js"
+    "test": "node test/e2e.js && node test/stress.js"
   },
   "keywords": [
     "git",
