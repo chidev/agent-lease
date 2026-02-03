@@ -5,19 +5,49 @@
 
 set -e
 
-# Find project root (where .git lives)
 PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 
 # Load config or use defaults
 CONFIG_FILE="$PROJECT_ROOT/.agent-lease.json"
 if [ -f "$CONFIG_FILE" ]; then
   PROJECT_NAME=$(grep -o '"projectName"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f4)
-  LOCK_DIR=$(grep -o '"lockDir"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f4)
+  RAW_LOCK_DIR=$(grep -o '"lockDir"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f4)
 fi
 
-# Defaults
+# If no projectName in config, try package.json name, then dirname
+if [ -z "$PROJECT_NAME" ]; then
+  PKG_FILE="$PROJECT_ROOT/package.json"
+  if [ -f "$PKG_FILE" ]; then
+    PROJECT_NAME=$(grep -o '"name"[[:space:]]*:[[:space:]]*"[^"]*"' "$PKG_FILE" 2>/dev/null | head -1 | cut -d'"' -f4 | sed 's/[^a-zA-Z0-9_-]/-/g')
+  fi
+fi
 PROJECT_NAME="${PROJECT_NAME:-$(basename "$PROJECT_ROOT")}"
-LOCK_DIR="${LOCK_DIR:-/tmp}"
+RAW_LOCK_DIR="${RAW_LOCK_DIR:-auto}"
+
+# Resolve lock dir (mirrors lib/config.js logic)
+# Priority: env > config value > XDG > /tmp
+if [ -n "$AGENT_LEASE_LOCK_DIR" ]; then
+  LOCK_DIR="$AGENT_LEASE_LOCK_DIR"
+elif [ "$RAW_LOCK_DIR" = "local" ]; then
+  LOCK_DIR="$PROJECT_ROOT/.agent-lease/locks"
+elif [ "$RAW_LOCK_DIR" = "auto" ] || [ "$RAW_LOCK_DIR" = "xdg" ]; then
+  if [ -n "$XDG_RUNTIME_DIR" ]; then
+    LOCK_DIR="$XDG_RUNTIME_DIR/agent-lease"
+  else
+    LOCK_DIR="/tmp"
+  fi
+else
+  # Custom absolute path
+  LOCK_DIR="$RAW_LOCK_DIR"
+fi
+
+# Override project name from env
+if [ -n "$AGENT_LEASE_PROJECT" ]; then
+  PROJECT_NAME="$AGENT_LEASE_PROJECT"
+fi
+
+# Ensure lock dir exists
+mkdir -p "$LOCK_DIR"
 
 # Get current commit hash (or 'new' for first commit)
 SHORT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "new")
@@ -49,11 +79,12 @@ if [ -f "$LOCK_FILE" ]; then
 fi
 
 # No lock exists - create one and block
-GUID=$(date +%s%N | sha256sum | head -c 12)
+GUID=$(date +%s | shasum | head -c 12)
 cat > "$LOCK_FILE" << EOF
 LOCK_GUID=$GUID
 CREATED=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 PROJECT=$PROJECT_NAME
+PHASE=commit
 STATUS=PENDING
 EOF
 
@@ -65,16 +96,13 @@ cat << EOF
 ║  Validation required before commit can proceed.              ║
 ╚══════════════════════════════════════════════════════════════╝
 
-Lock created: $LOCK_FILE
+Lock: $LOCK_FILE
 
-Before committing, validate your changes:
+Run your configured runners to release:
+  npx agent-lease release --audit-proof
 
-  □ Build passes?    npm run build
-  □ Lint passes?     npm run lint
-
-To proceed:
-  1. Run:            npx agent-lease release --audit-proof
-  2. Commit again:   git commit -m "your message"
+Then commit again:
+  git commit -m "your message"
 
 For AI agents:
   Tell Claude: "release the agent-lease lock"

@@ -7,24 +7,67 @@ const {
   checkLock,
   releaseLock,
   clearAllLocks,
-  runValidation
+  archiveLock
 } = require('../lib/lock-manager');
+const { runRunners, formatResults } = require('../lib/runner');
 
 const HELP = `
-agent-lease - Git hooks that FORCE validation before commits
+agent-lease - Forced validation gates for git commits
 
 COMMANDS:
-  init                    Install hooks to current project
-  release --audit-proof   Run validation + release lock
-  status                  Check current lock state
-  clear                   Remove all locks for this project
-  help                    Show this message
+  init                      Install hooks to current project
+  release --audit-proof     Run all runners + release lock
+  release --phase push      Run push-phase runners
+  status                    Check current lock state
+  clear                     Remove all locks for this project
+  runners                   List configured runners
+  help                      Show this message
 
-USAGE:
-  npx agent-lease init           # Setup hooks
-  npx agent-lease release --audit-proof   # Validate & release
-  npx agent-lease status         # Check lock
-  npx agent-lease clear          # Clean stale locks
+OPTIONS:
+  --phase <commit|push>     Which runners to execute (default: commit)
+
+ENV VARS:
+  AGENT_LEASE_LOCK_DIR      Override lock directory
+  AGENT_LEASE_PROJECT       Override project name
+  AGENT_LEASE_RUNNERS       Override runners (name:cmd,name:cmd)
+
+RUNNER CONFIG (.agent-lease.json):
+  {
+    "runners": [
+      { "name": "build", "command": "npm run build", "on": "commit" },
+      { "name": "lint", "command": "npm run lint", "on": "commit" },
+      { "name": "review", "command": "claude -p 'Review: {{diff}}'", "on": "push" }
+    ],
+    "lockDir": "auto"
+  }
+
+LOCK DIRS (priority):
+  1. AGENT_LEASE_LOCK_DIR env var
+  2. "local" → .agent-lease/locks/ (project-local)
+  3. "xdg"   → $XDG_RUNTIME_DIR/agent-lease/
+  4. "auto"  → XDG if available, else /tmp
+  5. Custom path
+
+TEMPLATE VARS IN COMMANDS:
+  {{diff}}     git diff (staged for commit, branch for push)
+  {{files}}    staged file list
+  {{project}}  project name
+  {{branch}}   current branch
+  {{hash}}     current commit hash
+
+EXAMPLES:
+  # Traditional
+  { "name": "build", "command": "npm run build" }
+
+  # Agentic: Claude reviews your diff at commit time
+  { "name": "claude-review", "command": "claude -p 'Review this for bugs: {{diff}}'" }
+
+  # Agentic: Larger model reviews on push
+  { "name": "opus-review", "command": "claude -p --model opus 'Deep review: {{diff}}'", "on": "push" }
+
+  # Any LLM CLI
+  { "name": "codex-review", "command": "codex -q 'Check: {{diff}}'" }
+  { "name": "ollama-review", "command": "echo '{{diff}}' | ollama run llama3 'Review this code'" }
 
 FOR AI AGENTS:
   Tell Claude: "release the agent-lease lock"
@@ -44,7 +87,6 @@ function cmd_init() {
     fs.mkdirSync(hooksDir, { recursive: true });
   }
 
-  // Find our hooks (installed package or local)
   const sourceHooksDir = path.join(__dirname, '..', 'hooks');
 
   for (const hook of ['pre-commit', 'pre-push']) {
@@ -56,7 +98,6 @@ function cmd_init() {
       continue;
     }
 
-    // Back up existing hook
     if (fs.existsSync(dest)) {
       const backup = `${dest}.agent-lease-backup`;
       fs.copyFileSync(dest, backup);
@@ -68,19 +109,39 @@ function cmd_init() {
     console.log(`  ✓ Installed ${hook}`);
   }
 
-  // Create config if not exists
   const configPath = path.join(root, '.agent-lease.json');
   if (!fs.existsSync(configPath)) {
     createDefaultConfig(root);
     console.log('  ✓ Created .agent-lease.json');
   }
 
+  // Create .agent-lease dir for local locks/audit
+  const leaseDir = path.join(root, '.agent-lease');
+  if (!fs.existsSync(leaseDir)) {
+    fs.mkdirSync(leaseDir, { recursive: true });
+  }
+
+  // Add .agent-lease/locks and .agent-lease/audit to .gitignore
+  const gitignorePath = path.join(root, '.gitignore');
+  const ignoreEntries = ['.agent-lease/locks/', '.agent-lease/audit/'];
+  if (fs.existsSync(gitignorePath)) {
+    let content = fs.readFileSync(gitignorePath, 'utf8');
+    for (const entry of ignoreEntries) {
+      if (!content.includes(entry)) {
+        content += `\n${entry}`;
+      }
+    }
+    fs.writeFileSync(gitignorePath, content);
+  }
+
+  const { config } = loadConfig(root);
   console.log('');
   console.log('╔══════════════════════════════════════════════════════════════╗');
   console.log('║  ✅ agent-lease installed                                    ║');
   console.log('╠══════════════════════════════════════════════════════════════╣');
   console.log('║  Next commit will create a validation gate.                  ║');
-  console.log('║  Build + lint must pass before commits go through.           ║');
+  console.log(`║  Lock dir: ${config.lockDir.padEnd(46)}  ║`);
+  console.log(`║  Runners: ${config._runners.length} configured${' '.repeat(39)}║`);
   console.log('╚══════════════════════════════════════════════════════════════╝');
   console.log('');
 }
@@ -92,11 +153,12 @@ function cmd_release(args) {
     process.exit(1);
   }
 
-  const { config, projectRoot } = loadConfig();
-  const { projectName } = config;
-  const lockDir = config.lockDir || '/tmp';
+  const phaseIdx = args.indexOf('--phase');
+  const phase = phaseIdx !== -1 ? args[phaseIdx + 1] : 'commit';
 
-  // Check lock exists
+  const { config, projectRoot } = loadConfig();
+  const { projectName, lockDir } = config;
+
   const lockState = checkLock(projectName, lockDir);
   if (!lockState.exists) {
     console.log('No active lock found. You can commit freely.');
@@ -108,16 +170,18 @@ function cmd_release(args) {
     return;
   }
 
+  const runners = config._runners;
+  const phaseRunners = runners.filter(r => (r.on || 'commit') === phase || (r.on || 'commit') === 'both');
+
   console.log('');
-  console.log('🔍 Running validation...');
+  console.log(`🔍 Running ${phaseRunners.length} runner(s) for phase: ${phase}`);
   console.log('');
 
-  const { allPassed, results } = runValidation(config);
+  const { allPassed, results, totalDuration } = runRunners(runners, projectName, phase);
 
-  for (const r of results) {
-    const icon = r.passed ? '✅' : '❌';
-    console.log(`  ${icon} ${r.name}: ${r.command}`);
-  }
+  console.log(formatResults(results));
+  console.log('');
+  console.log(`  Total: ${(totalDuration / 1000).toFixed(1)}s`);
   console.log('');
 
   if (!allPassed) {
@@ -126,9 +190,8 @@ function cmd_release(args) {
     process.exit(1);
   }
 
-  // All passed - stamp the lock
-  const result = releaseLock(projectName, lockDir);
-  console.log('✅ All validations passed. Lock released with audit proof.');
+  releaseLock(projectName, lockDir, results);
+  console.log('✅ All runners passed. Lock released with audit proof.');
   console.log('');
   console.log('Now run your commit again:');
   console.log('  git commit -m "your message"');
@@ -137,10 +200,13 @@ function cmd_release(args) {
 
 function cmd_status() {
   const { config } = loadConfig();
-  const { projectName } = config;
-  const lockDir = config.lockDir || '/tmp';
+  const { projectName, lockDir } = config;
 
   const lockState = checkLock(projectName, lockDir);
+
+  console.log(`Project:  ${projectName}`);
+  console.log(`Lock dir: ${lockDir}`);
+  console.log('');
 
   if (!lockState.exists) {
     console.log('🟢 No active lock. Commits are gated on next attempt.');
@@ -152,15 +218,36 @@ function cmd_status() {
   } else {
     console.log('🔴 Lock exists. Validation required before commit.');
     console.log(`   Lock: ${lockState.lockPath}`);
+    if (lockState.data && lockState.data.CREATED) {
+      console.log(`   Created: ${lockState.data.CREATED}`);
+    }
     console.log('');
     console.log('   Release: npx agent-lease release --audit-proof');
   }
 }
 
+function cmd_runners() {
+  const { config } = loadConfig();
+  const runners = config._runners;
+
+  console.log(`Configured runners (${runners.length}):\n`);
+
+  for (const r of runners) {
+    const phase = r.on || 'commit';
+    console.log(`  [${phase}] ${r.name}`);
+    console.log(`         ${r.command}`);
+    if (r.env && Object.keys(r.env).length > 0) {
+      console.log(`         env: ${JSON.stringify(r.env)}`);
+    }
+    console.log('');
+  }
+
+  console.log('Lock dir:', config.lockDir);
+}
+
 function cmd_clear() {
   const { config } = loadConfig();
-  const { projectName } = config;
-  const lockDir = config.lockDir || '/tmp';
+  const { projectName, lockDir } = config;
 
   const { cleared, paths } = clearAllLocks(projectName, lockDir);
 
@@ -184,6 +271,9 @@ switch (command) {
     break;
   case 'status':
     cmd_status();
+    break;
+  case 'runners':
+    cmd_runners();
     break;
   case 'clear':
     cmd_clear();

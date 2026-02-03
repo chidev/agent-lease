@@ -16,7 +16,7 @@ Unlike husky or lefthook which *run* validation, agent-lease creates a **gate** 
 │     ↓                                                       │
 │  4. npx agent-lease release --audit-proof                   │
 │     ↓                                                       │
-│  5. Runs: npm run build && npm run lint                     │
+│  5. Runs configured runners (build, lint, AI review...)     │
 │     ↓                                                       │
 │  6. ✅ Lock stamped with AUDIT_PROOF_PASSED                 │
 │     ↓                                                       │
@@ -39,53 +39,83 @@ npm install --save-dev agent-lease
 npx agent-lease init
 ```
 
-This creates:
-- `.git/hooks/pre-commit` - The validation gate
-- `.git/hooks/pre-push` - Optional upstream protection
-- `.agent-lease.json` - Configuration
+## Runners
 
-## Usage
+Runners are any CLI commands with a simple contract: **exit 0 = pass, exit 1 = fail, stdout = review text.**
 
-### Normal workflow
+This makes agent-lease extensible — plug in build tools, linters, or AI code review.
 
-```bash
-# Make changes...
-git add .
+### Traditional Runners
 
-# First commit attempt - blocked, lock created
-git commit -m "my feature"
-# ❌ COMMIT BLOCKED - Validation required
-
-# Run validation
-npx agent-lease release --audit-proof
-# ✅ build passed
-# ✅ lint passed
-# Lock released with audit proof
-
-# Second commit attempt - passes
-git commit -m "my feature"
-# ✅ Commit allowed
+```json
+{
+  "runners": [
+    { "name": "build", "command": "npm run build", "on": "commit" },
+    { "name": "lint", "command": "npm run lint", "on": "commit" },
+    { "name": "test", "command": "npm test", "on": "push" }
+  ]
+}
 ```
 
-### Check status
+### Agentic Runners (AI Code Review)
 
-```bash
-npx agent-lease status
-# 🔴 Lock exists. Validation required before commit.
+Pipe your diff into any LLM CLI. Smaller models on commit, larger models on push.
+
+```json
+{
+  "runners": [
+    { "name": "build", "command": "npm run build", "on": "commit" },
+    { "name": "haiku-review", "command": "claude -p 'Quick check for bugs: {{diff}}'", "on": "commit" },
+    { "name": "opus-review", "command": "claude -p --model opus 'Deep review for security and correctness: {{diff}}'", "on": "push" },
+    { "name": "codex-review", "command": "codex -q 'Check: {{diff}}'", "on": "push" }
+  ]
+}
 ```
 
-### Clear stale locks
+### Template Variables
 
-```bash
-npx agent-lease clear
-# Cleared 1 lock(s)
+Commands can use these variables:
+
+| Variable | Value |
+|----------|-------|
+| `{{diff}}` | `git diff --cached` (commit) or `git diff origin..HEAD` (push) |
+| `{{files}}` | Space-separated list of staged files |
+| `{{project}}` | Project name |
+| `{{branch}}` | Current branch |
+| `{{hash}}` | Current commit hash |
+
+### Runner Phases
+
+| Phase | When | Use Case |
+|-------|------|----------|
+| `commit` | On `git commit` | Build, lint, quick AI check |
+| `push` | On `git push` | Tests, deep AI review |
+| `both` | Both events | Critical checks |
+
+## Lock Storage (XDG-compliant)
+
+```json
+{ "lockDir": "auto" }
 ```
 
-### Bypass (emergencies only)
+| Value | Location |
+|-------|----------|
+| `"auto"` | `$XDG_RUNTIME_DIR/agent-lease/` if available, else `/tmp` |
+| `"local"` | `.agent-lease/locks/` (project-local) |
+| `"xdg"` | `$XDG_RUNTIME_DIR/agent-lease/` |
+| `"/custom/path"` | Any absolute path |
 
-```bash
-git commit --no-verify
-```
+Override with env var: `AGENT_LEASE_LOCK_DIR=/path`
+
+## Environment Variables
+
+All config can be overridden via env vars:
+
+| Variable | Description |
+|----------|-------------|
+| `AGENT_LEASE_LOCK_DIR` | Override lock directory |
+| `AGENT_LEASE_PROJECT` | Override project name |
+| `AGENT_LEASE_RUNNERS` | Override runners: `"build:npm run build,lint:npm run lint"` |
 
 ## Configuration
 
@@ -93,28 +123,39 @@ git commit --no-verify
 
 ```json
 {
-  "validation": {
-    "build": "npm run build",
-    "lint": "npm run lint"
-  },
-  "lockDir": "/tmp",
-  "projectName": "my-project",
-  "blockedRemotes": "upstream"
+  "runners": [
+    { "name": "build", "command": "npm run build", "on": "commit" },
+    { "name": "lint", "command": "npm run lint", "on": "commit" },
+    { "name": "review", "command": "claude -p 'Review: {{diff}}'", "on": "push" }
+  ],
+  "lockDir": "auto",
+  "projectName": "my-project"
 }
 ```
 
-### Options
+Legacy format still works:
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `validation.build` | `npm run build` | Build command |
-| `validation.lint` | `npm run lint` | Lint command |
-| `validation.test` | (none) | Optional test command |
-| `lockDir` | `/tmp` | Where lock files live |
-| `projectName` | from package.json | Lock file prefix |
-| `blockedRemotes` | `upstream` | Remotes to block pushes to |
+```json
+{
+  "validation": {
+    "build": "npm run build",
+    "lint": "npm run lint"
+  }
+}
+```
 
-## For AI Agents (Claude, Cursor, etc.)
+## CLI Commands
+
+```bash
+agent-lease init              # Install hooks
+agent-lease release --audit-proof   # Run runners + release lock
+agent-lease release --audit-proof --phase push  # Run push runners
+agent-lease status            # Check lock state
+agent-lease runners           # List configured runners
+agent-lease clear             # Remove stale locks
+```
+
+## For AI Agents
 
 When working with an AI coding assistant:
 
@@ -122,39 +163,36 @@ When working with an AI coding assistant:
 Tell Claude: "release the agent-lease lock"
 ```
 
-The agent will run:
-```bash
-npx agent-lease release --audit-proof
+The agent runs `npx agent-lease release --audit-proof`, fixes any failures, then commits again. The agent thinks "oh shit, forgot to build" **for you**.
+
+### Model Cascading Pattern
+
+Use fast/cheap models for commit-time checks, powerful models for push-time review:
+
+```
+commit → haiku reviews diff (fast, catches obvious issues)
+push   → opus reviews diff (thorough, catches subtle bugs)
 ```
 
-Then commit again.
+This gives you constant AI review without slowing down development.
+
+## Testing
+
+```bash
+node test/e2e.js
+```
+
+Runs 11 E2E tests covering the full lock/lease/runner cycle in an isolated git repo.
 
 ## Why Lock/Lease?
 
-Other git hook tools run validation *during* the commit. If you forget to run them, broken code goes through.
+Other git hook tools run validation *during* the commit. agent-lease is different:
 
-agent-lease is different:
 1. **First commit creates a lock** and blocks
 2. **You must explicitly run validation** to release
 3. **Second commit checks for proof** and proceeds
 
-This forces the validation step. No accidents.
-
-## Lock Files
-
-Locks are stored in `/tmp` by default:
-```
-/tmp/agent-lease-my-project-abc123.lock
-```
-
-Contents:
-```
-LOCK_GUID=abc123def
-CREATED=2026-02-02T20:00:00Z
-PROJECT=my-project
-STATUS=PENDING
-AUDIT_PROOF_PASSED=2026-02-02T20:01:00Z  # Added after validation
-```
+This forces the validation step. No accidents. No "I'll fix it later."
 
 ## License
 
