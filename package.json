@@ -1,0 +1,37 @@
+{
+  "name": "agent-lease",
+  "version": "1.0.0",
+  "description": "Git hooks that FORCE validation before commits via lock/lease pattern. No broken code reaches CI.",
+  "main": "lib/lock-manager.js",
+  "bin": {
+    "agent-lease": "./bin/agent-lease.js"
+  },
+  "scripts": {
+    "test": "node test/test.js"
+  },
+  "keywords": [
+    "git",
+    "hooks",
+    "validation",
+    "pre-commit",
+    "ci",
+    "agent",
+    "lock",
+    "lease",
+    "build",
+    "lint"
+  ],
+  "author": "kingly",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/chidev/agent-lease.git"
+  },
+  "files": [
+    "bin/",
+    "hooks/",
+    "lib/",
+    "README.md",
+    "LICENSE"
+  ]
+}

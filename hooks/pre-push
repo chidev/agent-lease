@@ -1,0 +1,44 @@
+#!/bin/bash
+# agent-lease pre-push hook
+# Optional: blocks pushes to protected remotes (e.g., upstream)
+# Most users just need pre-commit; this is extra protection
+
+set -e
+
+REMOTE="$1"
+URL="$2"
+
+# Find project root
+PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+
+# Load config
+CONFIG_FILE="$PROJECT_ROOT/.agent-lease.json"
+BLOCKED_REMOTES="upstream"  # Default: block pushes to 'upstream'
+
+if [ -f "$CONFIG_FILE" ]; then
+  CUSTOM_BLOCKED=$(grep -o '"blockedRemotes"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f4)
+  if [ -n "$CUSTOM_BLOCKED" ]; then
+    BLOCKED_REMOTES="$CUSTOM_BLOCKED"
+  fi
+fi
+
+# Check if pushing to blocked remote
+for BLOCKED in $BLOCKED_REMOTES; do
+  if [ "$REMOTE" = "$BLOCKED" ]; then
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════════╗"
+    echo "║  🛑 PUSH BLOCKED: Protected remote '$REMOTE'                  ║"
+    echo "╠══════════════════════════════════════════════════════════════╣"
+    echo "║  agent-lease prevents direct pushes to protected remotes.    ║"
+    echo "╚══════════════════════════════════════════════════════════════╝"
+    echo ""
+    echo "Options:"
+    echo "  1. Push to your fork first: git push origin"
+    echo "  2. Create a PR instead"
+    echo "  3. Bypass (if you're sure): git push --no-verify"
+    echo ""
+    exit 1
+  fi
+done
+
+exit 0

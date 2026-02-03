@@ -1,0 +1,87 @@
+#!/bin/bash
+# agent-lease pre-commit hook
+# Creates a validation gate that blocks commits until audit proof exists
+# Bypass with: git commit --no-verify (USE SPARINGLY)
+
+set -e
+
+# Find project root (where .git lives)
+PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+
+# Load config or use defaults
+CONFIG_FILE="$PROJECT_ROOT/.agent-lease.json"
+if [ -f "$CONFIG_FILE" ]; then
+  PROJECT_NAME=$(grep -o '"projectName"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f4)
+  LOCK_DIR=$(grep -o '"lockDir"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f4)
+fi
+
+# Defaults
+PROJECT_NAME="${PROJECT_NAME:-$(basename "$PROJECT_ROOT")}"
+LOCK_DIR="${LOCK_DIR:-/tmp}"
+
+# Get current commit hash (or 'new' for first commit)
+SHORT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "new")
+LOCK_FILE="$LOCK_DIR/agent-lease-$PROJECT_NAME-$SHORT_HASH.lock"
+
+# Check if lock exists with audit proof
+if [ -f "$LOCK_FILE" ]; then
+  if grep -q "AUDIT_PROOF_PASSED" "$LOCK_FILE" 2>/dev/null; then
+    echo ""
+    echo "✅ agent-lease: Validation proof found. Commit allowed."
+    echo ""
+    rm -f "$LOCK_FILE"
+    exit 0
+  else
+    echo ""
+    echo "❌ COMMIT BLOCKED - Validation incomplete"
+    echo ""
+    echo "Lock exists but audit not completed: $LOCK_FILE"
+    echo ""
+    echo "To proceed:"
+    echo "  1. Run validation:  npx agent-lease release --audit-proof"
+    echo "  2. Or tell Claude:  'release the agent-lease lock'"
+    echo ""
+    echo "To bypass (USE SPARINGLY):"
+    echo "  git commit --no-verify"
+    echo ""
+    exit 1
+  fi
+fi
+
+# No lock exists - create one and block
+GUID=$(date +%s%N | sha256sum | head -c 12)
+cat > "$LOCK_FILE" << EOF
+LOCK_GUID=$GUID
+CREATED=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+PROJECT=$PROJECT_NAME
+STATUS=PENDING
+EOF
+
+cat << EOF
+
+╔══════════════════════════════════════════════════════════════╗
+║  🔒 AGENT-LEASE: COMMIT BLOCKED                              ║
+╠══════════════════════════════════════════════════════════════╣
+║  Validation required before commit can proceed.              ║
+╚══════════════════════════════════════════════════════════════╝
+
+Lock created: $LOCK_FILE
+
+Before committing, validate your changes:
+
+  □ Build passes?    npm run build
+  □ Lint passes?     npm run lint
+
+To proceed:
+  1. Run:            npx agent-lease release --audit-proof
+  2. Commit again:   git commit -m "your message"
+
+For AI agents:
+  Tell Claude: "release the agent-lease lock"
+
+To bypass (USE SPARINGLY):
+  git commit --no-verify
+
+EOF
+
+exit 1
