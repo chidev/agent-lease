@@ -326,16 +326,16 @@ Triggered when git commit is attempted and no valid proof exists.
 
 Lock: /var/folders/.../agent-lease-my-app-abc1234.lock
 
-Run your configured runners to release:
+To release, run validation:
+
   npx agent-lease release --audit-proof
 
 Then commit again:
+
   git commit -m "your message"
 
-For AI agents:
-  Tell Claude: "release the agent-lease lock"
-
 To bypass (USE SPARINGLY):
+
   git commit --no-verify
 ```
 
@@ -690,23 +690,19 @@ git log --format="%h %s %(trailers:key=agent-lease-proof)" | grep -v "agent-leas
 
 ## For AI Agents
 
-When working with an AI coding assistant:
-
-```
-Tell Claude: "release the agent-lease lock"
-```
+AI coding agents work seamlessly with agent-lease. **No special prompting required.** The agent attempts a commit, reads the blocked output with clear instructions, runs validation, fixes failures, and retries.
 
 ### Agent Protocol
 
-1. **Attempt commit** --> hits lock, sees BLOCKED message
-2. **Run validation**: `npx agent-lease release --audit-proof`
-3. **Fix any failures** --> re-run release
+1. **Attempt commit** → blocked by hook with clear instructions
+2. **Agent reads output** → sees `npx agent-lease release --audit-proof`
+3. **Runs validation** → fixes any failures and reruns
 4. **Commit succeeds** with proof trailers
 
 ### Agent Benefits
 
-- Agent thinks "oh shit, forgot to build" **for you**
-- No more "CI failed" surprises
+- Self-documenting hook output — agents just read and act
+- No human intervention needed for the validation loop
 - AI review catches issues before human review
 - Audit trail proves agent ran validation
 

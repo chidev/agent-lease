@@ -1,0 +1,21 @@
+{
+  "lockDir": "auto",
+  "projectName": "agent-lease",
+  "runners": [
+    {
+      "name": "test",
+      "command": "npm test",
+      "on": "commit"
+    }
+  ],
+  "proof": {
+    "capture": true,
+    "archive": true,
+    "maxLength": 10000
+  },
+  "trailers": {
+    "proof": "agent-lease-proof",
+    "duration": "agent-lease-duration",
+    "report": "agent-lease-report"
+  }
+}

@@ -241,22 +241,37 @@ agent-lease clear                             # Remove stale locks
 
 ## For AI Agents
 
-When working with an AI coding assistant:
+AI coding agents (Claude, Codex, etc.) work seamlessly with agent-lease. **No special prompting required.**
+
+The agent attempts a commit, sees the blocked message with clear instructions, runs the validation command, fixes any failures, and retries. The hook output is self-documenting:
 
 ```
-Tell Claude: "release the agent-lease lock"
+╔══════════════════════════════════════════════════════════════╗
+║  🔒 AGENT-LEASE: COMMIT BLOCKED                              ║
+╠══════════════════════════════════════════════════════════════╣
+║  Validation required before commit can proceed.              ║
+╚══════════════════════════════════════════════════════════════╝
+
+To release, run validation:
+
+  npx agent-lease release --audit-proof
+
+Then commit again:
+
+  git commit -m "your message"
 ```
 
-The agent runs validation, fixes failures, then commits. **The agent thinks "oh shit, forgot to build" for you.**
+The agent reads this, runs the command, handles failures, and retries. **No human intervention needed.**
 
 ### Agent Protocol
 
-1. Attempt commit → hits lock
-2. Run `npx agent-lease release --audit-proof`
-3. Fix any failures
-4. Commit succeeds with proof
+1. Agent attempts commit → blocked by hook
+2. Agent sees instructions in output
+3. Agent runs `npx agent-lease release --audit-proof`
+4. If failures → agent fixes and reruns
+5. Commit succeeds with proof trailers
 
-See [docs/GUIDE.md](docs/GUIDE.md) for the full agent integration protocol.
+See [docs/GUIDE.md](docs/GUIDE.md) for advanced agent integration.
 
 ---
 

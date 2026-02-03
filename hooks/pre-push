@@ -91,11 +91,12 @@ if [ -f "$LOCK_FILE" ]; then
     echo ""
     echo "Lock exists but audit not completed: $LOCK_FILE"
     echo ""
-    echo "To proceed:"
-    echo "  1. Run validation:  npx agent-lease release --audit-proof --phase push"
-    echo "  2. Or tell Claude:  'release the agent-lease push lock'"
+    echo "To proceed, run validation:"
+    echo ""
+    echo "  npx agent-lease release --audit-proof --phase push"
     echo ""
     echo "To bypass (USE SPARINGLY):"
+    echo ""
     echo "  git push --no-verify"
     echo ""
     exit 1
@@ -126,16 +127,16 @@ Lock: $LOCK_FILE
 Remote: $REMOTE
 URL: $URL
 
-Run your configured push runners to release:
+To release, run validation:
+
   npx agent-lease release --audit-proof --phase push
 
 Then push again:
+
   git push
 
-For AI agents:
-  Tell Claude: "release the agent-lease push lock"
-
 To bypass (USE SPARINGLY):
+
   git push --no-verify
 
 EOF

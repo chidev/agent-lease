@@ -67,11 +67,12 @@ if [ -f "$LOCK_FILE" ]; then
     echo ""
     echo "Lock exists but audit not completed: $LOCK_FILE"
     echo ""
-    echo "To proceed:"
-    echo "  1. Run validation:  npx agent-lease release --audit-proof"
-    echo "  2. Or tell Claude:  'release the agent-lease lock'"
+    echo "To proceed, run validation:"
+    echo ""
+    echo "  npx agent-lease release --audit-proof"
     echo ""
     echo "To bypass (USE SPARINGLY):"
+    echo ""
     echo "  git commit --no-verify"
     echo ""
     exit 1
@@ -98,16 +99,16 @@ cat << EOF
 
 Lock: $LOCK_FILE
 
-Run your configured runners to release:
+To release, run validation:
+
   npx agent-lease release --audit-proof
 
 Then commit again:
+
   git commit -m "your message"
 
-For AI agents:
-  Tell Claude: "release the agent-lease lock"
-
 To bypass (USE SPARINGLY):
+
   git commit --no-verify
 
 EOF

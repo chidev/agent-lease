@@ -72,7 +72,7 @@ EXAMPLES:
   { "name": "ollama-review", "command": "echo '{{diff}}' | ollama run llama3 'Review this code'" }
 
 FOR AI AGENTS:
-  Tell Claude: "release the agent-lease lock"
+  Agents read the blocked output and run the release command automatically.
 `;
 
 function cmd_init() {
