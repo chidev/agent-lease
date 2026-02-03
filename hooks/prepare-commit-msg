@@ -68,9 +68,10 @@ fi
 # Extract trailer values
 PROOF=$(grep "^GIT_TRAILER_PROOF=" "$LOCK_FILE" 2>/dev/null | cut -d'=' -f2-)
 DURATION=$(grep "^GIT_TRAILER_DURATION=" "$LOCK_FILE" 2>/dev/null | cut -d'=' -f2-)
+REPORT=$(grep "^GIT_TRAILER_REPORT=" "$LOCK_FILE" 2>/dev/null | cut -d'=' -f2-)
 
 # If no trailer info, exit cleanly
-if [ -z "$PROOF" ] && [ -z "$DURATION" ]; then
+if [ -z "$PROOF" ] && [ -z "$DURATION" ] && [ -z "$REPORT" ]; then
   exit 0
 fi
 
@@ -84,6 +85,9 @@ fi
   fi
   if [ -n "$DURATION" ]; then
     echo "agent-lease-duration: $DURATION"
+  fi
+  if [ -n "$REPORT" ]; then
+    echo "agent-lease-report: $REPORT"
   fi
 } > "$COMMIT_MSG_FILE.tmp"
 

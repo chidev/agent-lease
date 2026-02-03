@@ -24,6 +24,8 @@ COMMANDS:
 
 OPTIONS:
   --phase <commit|push>     Which runners to execute (default: commit)
+  --report <json>           Attach manual report data to proof archive
+  --report-stdin            Read report data from stdin
                             Used with: release, status, clear
 
 ENV VARS:
@@ -149,7 +151,7 @@ function cmd_init() {
 function cmd_release(args) {
   if (!args.includes('--audit-proof')) {
     console.error('Error: Must pass --audit-proof to confirm intentional release');
-    console.error('Usage: agent-lease release --audit-proof [--phase commit|push]');
+    console.error('Usage: agent-lease release --audit-proof [--phase commit|push] [--report <json>] [--report-stdin]');
     process.exit(1);
   }
 
@@ -160,6 +162,19 @@ function cmd_release(args) {
     console.error(`Error: Invalid phase '${phase}'. Must be 'commit' or 'push'.`);
     process.exit(1);
   }
+
+  const reportIdx = args.indexOf('--report');
+  const reportData = reportIdx !== -1 ? args[reportIdx + 1] : null;
+
+  const reportStdin = args.includes('--report-stdin');
+  let stdinReport = null;
+  if (reportStdin) {
+    try {
+      stdinReport = fs.readFileSync('/dev/stdin', 'utf8');
+    } catch (e) {}
+  }
+
+  const manualReport = reportData || stdinReport;
 
   const { config, projectRoot } = loadConfig();
   const { projectName, lockDir } = config;
@@ -195,7 +210,7 @@ function cmd_release(args) {
     process.exit(1);
   }
 
-  releaseLock(projectName, lockDir, results, phase);
+  releaseLock(projectName, lockDir, results, phase, { projectRoot, manualReport });
   console.log(`✅ All runners passed. ${phase} lock released with audit proof.`);
   console.log('');
   if (phase === 'commit') {
