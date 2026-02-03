@@ -1,0 +1,92 @@
+#!/bin/bash
+# agent-lease prepare-commit-msg hook
+# Appends git trailers with validation proof to commit message
+
+COMMIT_MSG_FILE="$1"
+COMMIT_SOURCE="$2"
+
+# Skip for merge commits, squash, etc.
+if [ "$COMMIT_SOURCE" = "merge" ] || [ "$COMMIT_SOURCE" = "squash" ]; then
+  exit 0
+fi
+
+PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+
+# Load config or use defaults
+CONFIG_FILE="$PROJECT_ROOT/.agent-lease.json"
+if [ -f "$CONFIG_FILE" ]; then
+  PROJECT_NAME=$(grep -o '"projectName"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f4)
+  RAW_LOCK_DIR=$(grep -o '"lockDir"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f4)
+fi
+
+# If no projectName in config, try package.json name, then dirname
+if [ -z "$PROJECT_NAME" ]; then
+  PKG_FILE="$PROJECT_ROOT/package.json"
+  if [ -f "$PKG_FILE" ]; then
+    PROJECT_NAME=$(grep -o '"name"[[:space:]]*:[[:space:]]*"[^"]*"' "$PKG_FILE" 2>/dev/null | head -1 | cut -d'"' -f4 | sed 's/[^a-zA-Z0-9_-]/-/g')
+  fi
+fi
+PROJECT_NAME="${PROJECT_NAME:-$(basename "$PROJECT_ROOT")}"
+RAW_LOCK_DIR="${RAW_LOCK_DIR:-auto}"
+
+# Resolve lock dir (mirrors lib/config.js logic)
+# Priority: env > config value > XDG > /tmp
+if [ -n "$AGENT_LEASE_LOCK_DIR" ]; then
+  LOCK_DIR="$AGENT_LEASE_LOCK_DIR"
+elif [ "$RAW_LOCK_DIR" = "local" ]; then
+  LOCK_DIR="$PROJECT_ROOT/.agent-lease/locks"
+elif [ "$RAW_LOCK_DIR" = "auto" ] || [ "$RAW_LOCK_DIR" = "xdg" ]; then
+  if [ -n "$XDG_RUNTIME_DIR" ]; then
+    LOCK_DIR="$XDG_RUNTIME_DIR/agent-lease"
+  else
+    LOCK_DIR="/tmp"
+  fi
+else
+  # Custom absolute path
+  LOCK_DIR="$RAW_LOCK_DIR"
+fi
+
+# Override project name from env
+if [ -n "$AGENT_LEASE_PROJECT" ]; then
+  PROJECT_NAME="$AGENT_LEASE_PROJECT"
+fi
+
+# Get current commit hash (or 'new' for first commit)
+SHORT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "new")
+LOCK_FILE="$LOCK_DIR/agent-lease-$PROJECT_NAME-$SHORT_HASH.lock"
+
+# Check if lock exists with audit proof and trailer info
+if [ ! -f "$LOCK_FILE" ]; then
+  exit 0
+fi
+
+# Verify audit passed
+if ! grep -q "AUDIT_PROOF_PASSED" "$LOCK_FILE" 2>/dev/null; then
+  exit 0
+fi
+
+# Extract trailer values
+PROOF=$(grep "^GIT_TRAILER_PROOF=" "$LOCK_FILE" 2>/dev/null | cut -d'=' -f2-)
+DURATION=$(grep "^GIT_TRAILER_DURATION=" "$LOCK_FILE" 2>/dev/null | cut -d'=' -f2-)
+
+# If no trailer info, exit cleanly
+if [ -z "$PROOF" ] && [ -z "$DURATION" ]; then
+  exit 0
+fi
+
+# Append trailers to commit message
+# Git trailers go at the end, separated by a blank line
+{
+  cat "$COMMIT_MSG_FILE"
+  echo ""
+  if [ -n "$PROOF" ]; then
+    echo "agent-lease-proof: $PROOF"
+  fi
+  if [ -n "$DURATION" ]; then
+    echo "agent-lease-duration: $DURATION"
+  fi
+} > "$COMMIT_MSG_FILE.tmp"
+
+mv "$COMMIT_MSG_FILE.tmp" "$COMMIT_MSG_FILE"
+
+exit 0

@@ -1,6 +1,6 @@
 {
   "name": "agent-lease",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Git hooks that FORCE validation before commits via lock/lease pattern. No broken code reaches CI.",
   "main": "lib/lock-manager.js",
   "bin": {
@@ -27,11 +27,16 @@
     "type": "git",
     "url": "https://github.com/chidev/agent-lease.git"
   },
+  "homepage": "https://github.com/chidev/agent-lease",
+  "funding": "https://kinglystudio.ai",
   "files": [
     "bin/",
     "hooks/",
     "lib/",
     "README.md",
     "LICENSE"
-  ]
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
 }

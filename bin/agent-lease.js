@@ -89,7 +89,7 @@ function cmd_init() {
 
   const sourceHooksDir = path.join(__dirname, '..', 'hooks');
 
-  for (const hook of ['pre-commit', 'pre-push']) {
+  for (const hook of ['pre-commit', 'pre-push', 'prepare-commit-msg']) {
     const src = path.join(sourceHooksDir, hook);
     const dest = path.join(hooksDir, hook);
 
