@@ -4,12 +4,14 @@
 [![sponsor](https://img.shields.io/badge/sponsor-kinglystudio.ai-purple.svg)](https://kinglystudio.ai)
 
 ```
-   ___   ___  ___ _  _ _____     _    ___   _   ___ ___
-  /   \ / __|/ __| \| |_   _|___| |  | __| /_\ / __| __|
- | |_| | (_ | _|| .` | | ||___|| |__| _| / _ \\__ \ _|
- |_| |_|\___|___|_|\_| |_|     |____|___/_/ \_\___/___|
+                            _        _
+   __ _  __ _  ___ _ __   _| |_     | | ___  __ _ ___  ___
+  / _` |/ _` |/ _ \ '_ \ |_   _|____| |/ _ \/ _` / __|/ _ \
+ | (_| | (_| |  __/ | | |  |_|_____|_|  __/ (_| \__ \  __/
+  \__,_|\__, |\___|_| |_|            |_|\___|\__,_|___/\___|
+        |___/
 
-        Git hooks that FORCE validation. No escape.
+   🔒 Git hooks that FORCE validation. No escape.
 ```
 
 **Git hooks that FORCE validation. No broken code reaches CI.**
