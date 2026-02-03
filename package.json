@@ -1,13 +1,14 @@
 {
   "name": "agent-lease",
-  "version": "2.0.0",
+  "version": "3.3.0",
   "description": "Git hooks that FORCE validation before commits via lock/lease pattern. No broken code reaches CI.",
   "main": "lib/lock-manager.js",
   "bin": {
     "agent-lease": "./bin/agent-lease.js"
   },
   "scripts": {
-    "test": "node test/e2e.js && node test/stress.js"
+    "test": "node test/e2e.js && node test/stress.js && node test/topic.js",
+    "prepare": "husky"
   },
   "keywords": [
     "git",
@@ -38,5 +39,8 @@
   ],
   "publishConfig": {
     "access": "public"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7"
   }
 }

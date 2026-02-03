@@ -12,8 +12,12 @@ fi
 
 PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 
-# Load config or use defaults
-CONFIG_FILE="$PROJECT_ROOT/.agent-lease.json"
+# Load config or use defaults - check new location first, then legacy
+CONFIG_FILE="$PROJECT_ROOT/.agent-lease/config.json"
+if [ ! -f "$CONFIG_FILE" ]; then
+  CONFIG_FILE="$PROJECT_ROOT/.agent-lease.json"
+fi
+
 if [ -f "$CONFIG_FILE" ]; then
   PROJECT_NAME=$(grep -o '"projectName"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f4)
   RAW_LOCK_DIR=$(grep -o '"lockDir"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f4)
@@ -53,7 +57,8 @@ fi
 
 # Get current commit hash (or 'new' for first commit)
 SHORT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "new")
-LOCK_FILE="$LOCK_DIR/agent-lease-$PROJECT_NAME-$SHORT_HASH.lock"
+# Lock uses 'commit' phase (no suffix for backward compat)
+LOCK_FILE="$LOCK_DIR/agent-lease-$PROJECT_NAME-commit-$SHORT_HASH.lock"
 
 # Check if lock exists with audit proof and trailer info
 if [ ! -f "$LOCK_FILE" ]; then
@@ -69,9 +74,11 @@ fi
 PROOF=$(grep "^GIT_TRAILER_PROOF=" "$LOCK_FILE" 2>/dev/null | cut -d'=' -f2-)
 DURATION=$(grep "^GIT_TRAILER_DURATION=" "$LOCK_FILE" 2>/dev/null | cut -d'=' -f2-)
 REPORT=$(grep "^GIT_TRAILER_REPORT=" "$LOCK_FILE" 2>/dev/null | cut -d'=' -f2-)
+AGENT_SUMMARY=$(grep "^GIT_TRAILER_AGENT_SUMMARY=" "$LOCK_FILE" 2>/dev/null | cut -d'=' -f2-)
+LLM_FINDINGS=$(grep "^GIT_TRAILER_LLM_FINDINGS=" "$LOCK_FILE" 2>/dev/null | cut -d'=' -f2-)
 
 # If no trailer info, exit cleanly
-if [ -z "$PROOF" ] && [ -z "$DURATION" ] && [ -z "$REPORT" ]; then
+if [ -z "$PROOF" ] && [ -z "$DURATION" ] && [ -z "$REPORT" ] && [ -z "$AGENT_SUMMARY" ] && [ -z "$LLM_FINDINGS" ]; then
   exit 0
 fi
 
@@ -89,8 +96,17 @@ fi
   if [ -n "$REPORT" ]; then
     echo "agent-lease-report: $REPORT"
   fi
+  if [ -n "$AGENT_SUMMARY" ]; then
+    echo "agent-lease-agent-summary: $AGENT_SUMMARY"
+  fi
+  if [ -n "$LLM_FINDINGS" ]; then
+    echo "agent-lease-llm-findings: $LLM_FINDINGS"
+  fi
 } > "$COMMIT_MSG_FILE.tmp"
 
 mv "$COMMIT_MSG_FILE.tmp" "$COMMIT_MSG_FILE"
+
+# Clean up lock file now that trailers are extracted
+rm -f "$LOCK_FILE"
 
 exit 0

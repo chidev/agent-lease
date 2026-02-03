@@ -64,6 +64,29 @@ function agentLease(args, opts = {}) {
   return run(`node ${AGENT_LEASE_BIN} ${args}`, opts);
 }
 
+// Helper: write config to both legacy and v4 locations for consistency
+function writeTestConfig(config) {
+  fs.writeFileSync(path.join(testDir, '.agent-lease.json'), JSON.stringify(config));
+  const v4ConfigDir = path.join(testDir, '.agent-lease');
+  if (!fs.existsSync(v4ConfigDir)) {
+    fs.mkdirSync(v4ConfigDir, { recursive: true });
+  }
+  const v4Config = { ...config };
+  if (config.runners && Array.isArray(config.runners)) {
+    v4Config.topics = {};
+    for (const r of config.runners) {
+      const on = r.on || 'commit';
+      const topicName = on === 'commit' ? 'pre-commit' : on === 'push' ? 'pre-push' : on;
+      if (!v4Config.topics[topicName]) v4Config.topics[topicName] = { runners: [] };
+      v4Config.topics[topicName].runners.push({ name: r.name, command: r.command });
+    }
+  }
+  if (config.lockDir) {
+    v4Config.defaults = { lockDir: config.lockDir };
+  }
+  fs.writeFileSync(path.join(v4ConfigDir, 'config.json'), JSON.stringify(v4Config, null, 2));
+}
+
 function freshCommit(name) {
   // Helper: create file, stage, attempt commit (will block)
   fs.writeFileSync(path.join(testDir, `${name}.txt`), name);
@@ -77,7 +100,7 @@ function test_multiple_locks_same_project() {
   log('\n🧪 Stress: Multiple blocked commits accumulate locks');
 
   const config = { runners: [{ name: 'echo', command: 'echo ok', on: 'commit' }], lockDir: 'local' };
-  fs.writeFileSync('.agent-lease.json', JSON.stringify(config));
+  writeTestConfig(config);
   agentLease('init');
 
   // Create multiple files, each blocked commit creates a lock
@@ -102,7 +125,7 @@ function test_large_diff() {
     runners: [{ name: 'diff-size', command: 'echo "diff size: $(echo "{{diff}}" | wc -c)"', on: 'commit' }],
     lockDir: 'local'
   };
-  fs.writeFileSync('.agent-lease.json', JSON.stringify(config));
+  writeTestConfig(config);
   agentLease('init');
 
   // Create large file
@@ -127,7 +150,7 @@ function test_special_characters_in_diff() {
     runners: [{ name: 'echo', command: 'echo "checking special chars"', on: 'commit' }],
     lockDir: 'local'
   };
-  fs.writeFileSync('.agent-lease.json', JSON.stringify(config));
+  writeTestConfig(config);
   agentLease('init');
 
   // File with special chars
@@ -161,7 +184,7 @@ function test_concurrent_commits() {
     runners: [{ name: 'fast', command: 'echo fast', on: 'commit' }],
     lockDir: 'local'
   };
-  fs.writeFileSync('.agent-lease.json', JSON.stringify(config));
+  writeTestConfig(config);
   agentLease('init');
 
   // Rapid fire: commit, release, commit
@@ -186,7 +209,7 @@ function test_runner_timeout() {
     runners: [{ name: 'slow', command: 'npm run slow', on: 'commit' }],
     lockDir: 'local'
   };
-  fs.writeFileSync('.agent-lease.json', JSON.stringify(config));
+  writeTestConfig(config);
   agentLease('init');
 
   fs.writeFileSync('slow.txt', 'slow');
@@ -213,7 +236,7 @@ function test_empty_runners() {
   log('\n🧪 Stress: No runners configured');
 
   const config = { runners: [], lockDir: 'local' };
-  fs.writeFileSync('.agent-lease.json', JSON.stringify(config));
+  writeTestConfig(config);
   agentLease('init');
 
   fs.writeFileSync('empty.txt', 'empty');
@@ -236,7 +259,7 @@ function test_xdg_runtime_dir() {
   fs.mkdirSync(xdgDir);
 
   const config = { runners: [{ name: 'echo', command: 'echo ok', on: 'commit' }], lockDir: 'xdg' };
-  fs.writeFileSync('.agent-lease.json', JSON.stringify(config));
+  writeTestConfig(config);
   agentLease('init');
 
   fs.writeFileSync('xdg.txt', 'xdg');
@@ -289,7 +312,7 @@ function test_binary_files() {
     runners: [{ name: 'echo', command: 'echo binary-ok', on: 'commit' }],
     lockDir: 'local'
   };
-  fs.writeFileSync('.agent-lease.json', JSON.stringify(config));
+  writeTestConfig(config);
   agentLease('init');
 
   // Create binary file
@@ -315,7 +338,7 @@ function test_no_staged_changes() {
     runners: [{ name: 'echo', command: 'echo ok', on: 'commit' }],
     lockDir: 'local'
   };
-  fs.writeFileSync('.agent-lease.json', JSON.stringify(config));
+  writeTestConfig(config);
   agentLease('init');
 
   // First make a commit so we have a HEAD
@@ -349,7 +372,7 @@ function test_amend_commit() {
     runners: [{ name: 'echo', command: 'echo ok', on: 'commit' }],
     lockDir: 'local'
   };
-  fs.writeFileSync('.agent-lease.json', JSON.stringify(config));
+  writeTestConfig(config);
   agentLease('init');
 
   // First commit
@@ -364,8 +387,8 @@ function test_amend_commit() {
   run('git add amend1.txt');
   const amendResult = run('git commit --amend -m "amended"');
 
-  // Should block (amend is a new commit)
-  if (!amendResult.output.includes('COMMIT BLOCKED')) {
+  // Should block (amend is a new commit) — v3.3 uses --no-verify warning
+  if (!amendResult.output.includes('--no-verify is FORBIDDEN')) {
     return fail('amend should trigger lock', amendResult.output);
   }
 
@@ -394,7 +417,7 @@ function test_runner_with_exit_code_validation() {
       runners: [{ name: 'exitcode', command: `exit ${t.code}`, on: 'commit' }],
       lockDir: 'local'
     };
-    fs.writeFileSync('.agent-lease.json', JSON.stringify(config));
+    writeTestConfig(config);
     agentLease('init');
 
     fs.writeFileSync(`exit${t.code}.txt`, `exit${t.code}`);

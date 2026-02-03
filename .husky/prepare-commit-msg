@@ -1,0 +1,5 @@
+#!/bin/bash
+# agent-lease prepare-commit-msg hook via husky
+COMMIT_MSG_FILE="$1"
+COMMIT_SOURCE="$2"
+npx agent-lease --hook prepare-commit-msg "$COMMIT_MSG_FILE" "$COMMIT_SOURCE"

@@ -1,0 +1,5 @@
+#!/bin/bash
+# agent-lease pre-push hook via husky
+REMOTE="$1"
+URL="$2"
+npx agent-lease --hook pre-push "$REMOTE" "$URL"

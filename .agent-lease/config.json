@@ -1,0 +1,41 @@
+{
+  "topics": {
+    "pre-commit": {
+      "runners": [
+        {
+          "name": "test",
+          "command": "node test/e2e.js && node test/stress.js"
+        }
+      ]
+    },
+    "prepare-commit-msg": {
+      "runners": []
+    },
+    "commit-msg": {
+      "runners": [
+        {
+          "name": "conventional",
+          "command": "echo 'Checking commit format'"
+        }
+      ]
+    },
+    "pre-push": {
+      "runners": [
+        {
+          "name": "full-test",
+          "command": "npm test"
+        }
+      ]
+    },
+    "post-commit": {
+      "runners": []
+    },
+    "pre-rebase": {
+      "runners": []
+    }
+  },
+  "defaults": {
+    "lockDir": "local",
+    "templateDir": ".agent-lease/templates"
+  }
+}

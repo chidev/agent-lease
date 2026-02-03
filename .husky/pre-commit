@@ -1,0 +1,3 @@
+#!/bin/bash
+# agent-lease pre-commit hook via husky
+npx agent-lease --hook pre-commit
