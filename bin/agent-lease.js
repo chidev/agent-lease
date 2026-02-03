@@ -17,7 +17,6 @@ agent-lease - Forced validation gates for git commits
 COMMANDS:
   init                      Install hooks to current project
   release --audit-proof     Run all runners + release lock
-  release --phase push      Run push-phase runners
   status                    Check current lock state
   clear                     Remove all locks for this project
   runners                   List configured runners
@@ -25,6 +24,7 @@ COMMANDS:
 
 OPTIONS:
   --phase <commit|push>     Which runners to execute (default: commit)
+                            Used with: release, status, clear
 
 ENV VARS:
   AGENT_LEASE_LOCK_DIR      Override lock directory
@@ -60,7 +60,7 @@ EXAMPLES:
   { "name": "build", "command": "npm run build" }
 
   # Agentic: Claude reviews your diff at commit time
-  { "name": "claude-review", "command": "claude -p 'Review this for bugs: {{diff}}'" }
+  { "name": "claude-review", "command": "claude -p 'Review this for bugs: {{diff}}'", "on": "commit" }
 
   # Agentic: Larger model reviews on push
   { "name": "opus-review", "command": "claude -p --model opus 'Deep review: {{diff}}'", "on": "push" }
@@ -149,24 +149,29 @@ function cmd_init() {
 function cmd_release(args) {
   if (!args.includes('--audit-proof')) {
     console.error('Error: Must pass --audit-proof to confirm intentional release');
-    console.error('Usage: agent-lease release --audit-proof');
+    console.error('Usage: agent-lease release --audit-proof [--phase commit|push]');
     process.exit(1);
   }
 
   const phaseIdx = args.indexOf('--phase');
   const phase = phaseIdx !== -1 ? args[phaseIdx + 1] : 'commit';
 
+  if (!['commit', 'push'].includes(phase)) {
+    console.error(`Error: Invalid phase '${phase}'. Must be 'commit' or 'push'.`);
+    process.exit(1);
+  }
+
   const { config, projectRoot } = loadConfig();
   const { projectName, lockDir } = config;
 
-  const lockState = checkLock(projectName, lockDir);
+  const lockState = checkLock(projectName, lockDir, phase);
   if (!lockState.exists) {
-    console.log('No active lock found. You can commit freely.');
+    console.log(`No active ${phase} lock found. You can ${phase} freely.`);
     return;
   }
 
   if (lockState.auditPassed) {
-    console.log('Lock already has audit proof. Commit should proceed.');
+    console.log(`Lock already has audit proof. ${phase === 'commit' ? 'Commit' : 'Push'} should proceed.`);
     return;
   }
 
@@ -190,39 +195,60 @@ function cmd_release(args) {
     process.exit(1);
   }
 
-  releaseLock(projectName, lockDir, results);
-  console.log('✅ All runners passed. Lock released with audit proof.');
+  releaseLock(projectName, lockDir, results, phase);
+  console.log(`✅ All runners passed. ${phase} lock released with audit proof.`);
   console.log('');
-  console.log('Now run your commit again:');
-  console.log('  git commit -m "your message"');
+  if (phase === 'commit') {
+    console.log('Now run your commit again:');
+    console.log('  git commit -m "your message"');
+  } else {
+    console.log('Now run your push again:');
+    console.log('  git push');
+  }
   console.log('');
 }
 
-function cmd_status() {
+function cmd_status(args) {
   const { config } = loadConfig();
   const { projectName, lockDir } = config;
 
-  const lockState = checkLock(projectName, lockDir);
+  const phaseIdx = args.indexOf('--phase');
+  const phase = phaseIdx !== -1 ? args[phaseIdx + 1] : null;
+
+  if (phase && !['commit', 'push'].includes(phase)) {
+    console.error(`Error: Invalid phase '${phase}'. Must be 'commit' or 'push'.`);
+    process.exit(1);
+  }
 
   console.log(`Project:  ${projectName}`);
   console.log(`Lock dir: ${lockDir}`);
   console.log('');
 
-  if (!lockState.exists) {
-    console.log('🟢 No active lock. Commits are gated on next attempt.');
-    return;
-  }
+  // Check both phases if no specific phase requested
+  const phasesToCheck = phase ? [phase] : ['commit', 'push'];
 
-  if (lockState.auditPassed) {
-    console.log('🟢 Lock exists with audit proof. Next commit will pass.');
-  } else {
-    console.log('🔴 Lock exists. Validation required before commit.');
-    console.log(`   Lock: ${lockState.lockPath}`);
-    if (lockState.data && lockState.data.CREATED) {
-      console.log(`   Created: ${lockState.data.CREATED}`);
+  for (const p of phasesToCheck) {
+    const lockState = checkLock(projectName, lockDir, p);
+
+    console.log(`[${p.toUpperCase()} PHASE]`);
+
+    if (!lockState.exists) {
+      console.log(`  🟢 No active lock. ${p === 'commit' ? 'Commits' : 'Pushes'} are gated on next attempt.`);
+    } else if (lockState.auditPassed) {
+      console.log(`  🟢 Lock exists with audit proof. Next ${p} will pass.`);
+    } else {
+      console.log(`  🔴 Lock exists. Validation required before ${p}.`);
+      console.log(`     Lock: ${lockState.lockPath}`);
+      if (lockState.data && lockState.data.CREATED) {
+        console.log(`     Created: ${lockState.data.CREATED}`);
+      }
+      if (lockState.data && lockState.data.REMOTE) {
+        console.log(`     Remote: ${lockState.data.REMOTE}`);
+      }
+      console.log('');
+      console.log(`     Release: npx agent-lease release --audit-proof --phase ${p}`);
     }
     console.log('');
-    console.log('   Release: npx agent-lease release --audit-proof');
   }
 }
 
@@ -245,16 +271,24 @@ function cmd_runners() {
   console.log('Lock dir:', config.lockDir);
 }
 
-function cmd_clear() {
+function cmd_clear(args) {
   const { config } = loadConfig();
   const { projectName, lockDir } = config;
 
-  const { cleared, paths } = clearAllLocks(projectName, lockDir);
+  const phaseIdx = args.indexOf('--phase');
+  const phase = phaseIdx !== -1 ? args[phaseIdx + 1] : null;
+
+  if (phase && !['commit', 'push'].includes(phase)) {
+    console.error(`Error: Invalid phase '${phase}'. Must be 'commit' or 'push'.`);
+    process.exit(1);
+  }
+
+  const { cleared, paths } = clearAllLocks(projectName, lockDir, phase);
 
   if (cleared === 0) {
-    console.log('No locks found to clear.');
+    console.log(`No ${phase ? phase + ' ' : ''}locks found to clear.`);
   } else {
-    console.log(`Cleared ${cleared} lock(s):`);
+    console.log(`Cleared ${cleared} ${phase ? phase + ' ' : ''}lock(s):`);
     paths.forEach(p => console.log(`  ✓ ${p}`));
   }
 }
@@ -270,13 +304,13 @@ switch (command) {
     cmd_release(args);
     break;
   case 'status':
-    cmd_status();
+    cmd_status(args);
     break;
   case 'runners':
     cmd_runners();
     break;
   case 'clear':
-    cmd_clear();
+    cmd_clear(args);
     break;
   case 'help':
   case '--help':

@@ -1,26 +1,33 @@
 #!/bin/bash
 # agent-lease pre-push hook
-# Optional: blocks pushes to protected remotes (e.g., upstream)
-# Most users just need pre-commit; this is extra protection
+# Mirrors pre-commit logic but for push phase
+# Creates push-specific lock and blocks until validation proof exists
 
 set -e
 
 REMOTE="$1"
 URL="$2"
 
-# Find project root
 PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 
-# Load config
+# Load config or use defaults
 CONFIG_FILE="$PROJECT_ROOT/.agent-lease.json"
-BLOCKED_REMOTES="upstream"  # Default: block pushes to 'upstream'
-
 if [ -f "$CONFIG_FILE" ]; then
-  CUSTOM_BLOCKED=$(grep -o '"blockedRemotes"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f4)
-  if [ -n "$CUSTOM_BLOCKED" ]; then
-    BLOCKED_REMOTES="$CUSTOM_BLOCKED"
+  PROJECT_NAME=$(grep -o '"projectName"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f4)
+  RAW_LOCK_DIR=$(grep -o '"lockDir"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f4)
+  BLOCKED_REMOTES=$(grep -o '"blockedRemotes"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONFIG_FILE" 2>/dev/null | cut -d'"' -f4)
+fi
+
+# If no projectName in config, try package.json name, then dirname
+if [ -z "$PROJECT_NAME" ]; then
+  PKG_FILE="$PROJECT_ROOT/package.json"
+  if [ -f "$PKG_FILE" ]; then
+    PROJECT_NAME=$(grep -o '"name"[[:space:]]*:[[:space:]]*"[^"]*"' "$PKG_FILE" 2>/dev/null | head -1 | cut -d'"' -f4 | sed 's/[^a-zA-Z0-9_-]/-/g')
   fi
 fi
+PROJECT_NAME="${PROJECT_NAME:-$(basename "$PROJECT_ROOT")}"
+RAW_LOCK_DIR="${RAW_LOCK_DIR:-auto}"
+BLOCKED_REMOTES="${BLOCKED_REMOTES:-upstream}"
 
 # Check if pushing to blocked remote
 for BLOCKED in $BLOCKED_REMOTES; do
@@ -41,4 +48,96 @@ for BLOCKED in $BLOCKED_REMOTES; do
   fi
 done
 
-exit 0
+# Resolve lock dir (mirrors lib/config.js logic)
+# Priority: env > config value > XDG > /tmp
+if [ -n "$AGENT_LEASE_LOCK_DIR" ]; then
+  LOCK_DIR="$AGENT_LEASE_LOCK_DIR"
+elif [ "$RAW_LOCK_DIR" = "local" ]; then
+  LOCK_DIR="$PROJECT_ROOT/.agent-lease/locks"
+elif [ "$RAW_LOCK_DIR" = "auto" ] || [ "$RAW_LOCK_DIR" = "xdg" ]; then
+  if [ -n "$XDG_RUNTIME_DIR" ]; then
+    LOCK_DIR="$XDG_RUNTIME_DIR/agent-lease"
+  else
+    LOCK_DIR="/tmp"
+  fi
+else
+  # Custom absolute path
+  LOCK_DIR="$RAW_LOCK_DIR"
+fi
+
+# Override project name from env
+if [ -n "$AGENT_LEASE_PROJECT" ]; then
+  PROJECT_NAME="$AGENT_LEASE_PROJECT"
+fi
+
+# Ensure lock dir exists
+mkdir -p "$LOCK_DIR"
+
+# Get current commit hash (or 'new' for first commit)
+SHORT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "new")
+LOCK_FILE="$LOCK_DIR/agent-lease-$PROJECT_NAME-push-$SHORT_HASH.lock"
+
+# Check if lock exists with audit proof
+if [ -f "$LOCK_FILE" ]; then
+  if grep -q "AUDIT_PROOF_PASSED" "$LOCK_FILE" 2>/dev/null; then
+    echo ""
+    echo "✅ agent-lease: Push validation proof found. Push allowed."
+    echo ""
+    rm -f "$LOCK_FILE"
+    exit 0
+  else
+    echo ""
+    echo "❌ PUSH BLOCKED - Validation incomplete"
+    echo ""
+    echo "Lock exists but audit not completed: $LOCK_FILE"
+    echo ""
+    echo "To proceed:"
+    echo "  1. Run validation:  npx agent-lease release --audit-proof --phase push"
+    echo "  2. Or tell Claude:  'release the agent-lease push lock'"
+    echo ""
+    echo "To bypass (USE SPARINGLY):"
+    echo "  git push --no-verify"
+    echo ""
+    exit 1
+  fi
+fi
+
+# No lock exists - create one and block
+GUID=$(date +%s | shasum | head -c 12)
+cat > "$LOCK_FILE" << EOF
+LOCK_GUID=$GUID
+CREATED=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+PROJECT=$PROJECT_NAME
+PHASE=push
+REMOTE=$REMOTE
+URL=$URL
+STATUS=PENDING
+EOF
+
+cat << EOF
+
+╔══════════════════════════════════════════════════════════════╗
+║  🔒 AGENT-LEASE: PUSH BLOCKED                                ║
+╠══════════════════════════════════════════════════════════════╣
+║  Push validation required before push can proceed.           ║
+╚══════════════════════════════════════════════════════════════╝
+
+Lock: $LOCK_FILE
+Remote: $REMOTE
+URL: $URL
+
+Run your configured push runners to release:
+  npx agent-lease release --audit-proof --phase push
+
+Then push again:
+  git push
+
+For AI agents:
+  Tell Claude: "release the agent-lease push lock"
+
+To bypass (USE SPARINGLY):
+  git push --no-verify
+
+EOF
+
+exit 1

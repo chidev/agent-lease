@@ -1,4 +1,4 @@
-# Agent-Lease Launch Thread
+# Agent-Lease v2 Launch Thread
 
 ---
 
@@ -10,77 +10,128 @@ Push broken code → CI fails → feel dumb → fix → push again
 
 It's not a skill issue. It's a workflow gap.
 
-I built agent-lease to fix this. It FORCES validation before commits using a lock/lease pattern.
+I built agent-lease v2 to fix this. It FORCES validation before commits using a lock/lease pattern + pluggable runners.
 
 Thread 🧵
 
 ---
 
-**Tweet 2: What Makes It Different**
+**Tweet 2: Pluggable Runners**
 
-Husky/lefthook run validation DURING commits. Devs bypass them with --no-verify.
+v2 supports ANY CLI command with a simple contract:
 
-Agent-lease is different:
+exit 0 = pass, exit 1 = fail, stdout = review text
 
-• 1st commit → creates lock, BLOCKS
-• Run validation → get proof
-• 2nd commit → verifies proof, allows
+Traditional runners:
+• `npm run build`
+• `npm run lint`
+• `npm test`
 
-Can't bypass. Can't forget. Forces the step.
-
----
-
-**Tweet 3: The Lock/Lease Pattern**
-
-Borrowed from distributed systems:
-
-1. Process wants resource → acquires lock
-2. Does work, proves completion
-3. Releases lock with proof
-4. Resource safe to access
-
-Applied to git:
-- Lock = .agent-lease.json
-- Work = build/lint/tests
-- Proof = AUDIT_PROOF_PASSED timestamp
+Agentic runners:
+• `claude -p "Review: {{diff}}"`
+• `codex -q "Check: {{diff}}"`
+• `ollama run llama3 "Audit: {{diff}}"`
 
 ---
 
-**Tweet 4: Agent-Native Design**
+**Tweet 3: Model Cascading**
 
-Built for AI-assisted development.
+Smaller models review every commit (fast).
+Larger models review on push (thorough).
 
-You: "Commit this"
-Claude: *sees lock*
-Claude: "Running validation gates..."
-Claude: `npx agent-lease release --audit-proof`
-Claude: ✅ "Validated & committed"
+Config:
+```json
+{
+  "runners": [
+    { "name": "haiku", "command": "claude -p 'Quick check: {{diff}}'", "on": "commit" },
+    { "name": "opus", "command": "claude --model opus -p 'Deep review: {{diff}}'", "on": "push" }
+  ]
+}
+```
 
-The agent enforces the discipline FOR you.
+Fast feedback + deep validation.
 
 ---
 
-**Tweet 5: Open Source**
+**Tweet 4: Template Variables**
+
+Commands support rich context:
+
+• `{{diff}}` → git diff (staged or origin..HEAD)
+• `{{files}}` → changed files
+• `{{project}}` → project name
+• `{{branch}}` → current branch
+• `{{hash}}` → commit hash
+
+Pipe full context to any LLM CLI.
+
+---
+
+**Tweet 5: XDG-Compliant + Env Overrides**
+
+Lock storage:
+• `"auto"` → XDG_RUNTIME_DIR or /tmp
+• `"local"` → .agent-lease/locks/
+• `"xdg"` → XDG_RUNTIME_DIR/agent-lease/
+
+Env overrides:
+• AGENT_LEASE_LOCK_DIR
+• AGENT_LEASE_PROJECT
+• AGENT_LEASE_RUNNERS
+
+Zero-config or full control.
+
+---
+
+**Tweet 6: Phase Support**
+
+Commit vs push runners:
+
+• commit → build, lint, haiku review (fast)
+• push → tests, opus review (thorough)
+• both → critical security checks
+
+Optimize for speed without sacrificing quality.
+
+---
+
+**Tweet 7: E2E Tested**
+
+23 E2E + stress tests covering:
+• Lock/lease cycle
+• Runner execution
+• Template expansion
+• Phase filtering
+• Concurrent access
+• XDG compliance
+
+Real git repos, real hooks, real edge cases.
+
+---
+
+**Tweet 8: Open Source**
 
 Available now:
 
-📦 `npm install --save-dev agent-lease`
+📦 `npm install -g agent-lease`
 ⚙️ `npx agent-lease init`
 🔒 Commit → blocked until validated
+🤖 Pipe diff to any LLM
 
 GitHub: [link]
 
-Issues/PRs welcome. Built this because I kept shipping broken code and got tired of it.
+Built this because I kept shipping broken code and got tired of it.
 
 ---
 
-**Tweet 6: The Meta**
+**Tweet 9: The Meta**
 
-Built this entire system with Claude using team mode + validation gates.
+Built with Claude using team mode + agent-lease v2.
 
-Dogfooding from day 1.
-
-The agent that helped me build it now forces itself to validate before committing.
+The agent that helped me build it now:
+• Forces itself to validate before committing
+• Runs haiku on commits, opus on pushes
+• Pipes diffs to Claude for self-review
 
 Software building software that forces software to be better.
 

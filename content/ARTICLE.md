@@ -121,6 +121,102 @@ Present a dashboard:
 
 Get explicit approval. Then build.
 
+## Agentic Runners: AI Code Review on Every Commit
+
+This is where agent-lease v2 gets interesting. Instead of just running build tools, you can pipe your diff into **any LLM CLI**.
+
+The contract is simple: **exit 0 = pass, exit 1 = fail, stdout = review text.**
+
+### Examples
+
+**Claude (via Anthropic CLI):**
+```json
+{
+  "name": "claude-review",
+  "command": "claude -p 'Review this diff for bugs and security issues: {{diff}}'",
+  "on": "commit"
+}
+```
+
+**OpenAI Codex:**
+```json
+{
+  "name": "codex-review",
+  "command": "codex -q 'Check this code for issues: {{diff}}'",
+  "on": "push"
+}
+```
+
+**Local Ollama:**
+```json
+{
+  "name": "llama-review",
+  "command": "ollama run llama3 'Audit this diff: {{diff}}'",
+  "on": "commit"
+}
+```
+
+The `{{diff}}` variable is automatically replaced with `git diff --cached` (for commits) or `git diff origin..HEAD` (for pushes).
+
+### Model Cascading: Fast + Thorough
+
+Here's the pattern that actually works in practice:
+
+**Small model on commit (fast feedback):**
+- Haiku or GPT-3.5
+- Catches obvious bugs
+- Takes 2-5 seconds
+- Runs every commit
+
+**Large model on push (thorough review):**
+- Opus or GPT-4
+- Deep security/correctness analysis
+- Takes 10-30 seconds
+- Runs before push to main
+
+**Config:**
+```json
+{
+  "runners": [
+    { "name": "build", "command": "npm run build", "on": "commit" },
+    { "name": "haiku", "command": "claude -p 'Quick check for obvious bugs: {{diff}}'", "on": "commit" },
+    { "name": "opus", "command": "claude --model opus -p 'Deep review for security and correctness: {{diff}}'", "on": "push" }
+  ]
+}
+```
+
+You get constant AI review without slowing down your workflow. Commit freely with haiku. Push confidently with opus.
+
+### Template Variables
+
+Commands can use rich context:
+
+| Variable | Value | Example |
+|----------|-------|---------|
+| `{{diff}}` | Staged changes or full PR diff | `git diff --cached` or `git diff origin..HEAD` |
+| `{{files}}` | Changed file paths | `src/auth.ts src/user.ts` |
+| `{{project}}` | Project name | `my-app` |
+| `{{branch}}` | Current branch | `feature/add-auth` |
+| `{{hash}}` | Commit hash | `a1b2c3d` |
+
+**Example with multiple variables:**
+```json
+{
+  "name": "contextual-review",
+  "command": "claude -p 'Review {{project}} branch {{branch}} files {{files}}: {{diff}}'",
+  "on": "push"
+}
+```
+
+### Why This Works
+
+1. **LLMs catch different bugs than linters.** Type errors vs logic errors.
+2. **Fast models are cheap.** Haiku costs ~$0.001 per commit.
+3. **You can't bypass it.** The lock forces the step.
+4. **It learns your patterns.** Same model reviews your code consistently.
+
+I've caught real bugs with this. Null pointer dereferences. Race conditions. Off-by-one errors. Stuff that passed TypeScript and ESLint but would have crashed in prod.
+
 ## Implementation: The Code
 
 Here's how agent-lease works under the hood.
@@ -204,33 +300,56 @@ async function release(options) {
 
 ### Config File
 
-```javascript
-// .agent-lease.config.js
-module.exports = {
-  validators: [
+```json
+{
+  "runners": [
     {
-      name: 'TypeScript Build',
-      command: 'tsc --noEmit',
-      required: true
+      "name": "build",
+      "command": "npm run build",
+      "on": "commit"
     },
     {
-      name: 'ESLint',
-      command: 'eslint src/',
-      required: true
+      "name": "lint",
+      "command": "npm run lint",
+      "on": "commit"
     },
     {
-      name: 'Unit Tests',
-      command: 'npm test',
-      required: false // optional on demand
+      "name": "haiku-review",
+      "command": "claude -p 'Quick check for bugs: {{diff}}'",
+      "on": "commit"
+    },
+    {
+      "name": "test",
+      "command": "npm test",
+      "on": "push"
+    },
+    {
+      "name": "opus-review",
+      "command": "claude --model opus -p 'Deep review for security and correctness: {{diff}}'",
+      "on": "push"
     }
   ],
+  "lockDir": "auto",
+  "projectName": "my-app"
+}
+```
 
-  // Optional: bypass rules
-  bypass: {
-    branches: ['wip/*'], // allow bypass on WIP branches
-    message: '[skip-lease]' // allow bypass with commit message flag
-  }
-};
+**Runner phases:**
+- `"commit"` — Runs on `git commit` (fast checks: build, lint, quick AI review)
+- `"push"` — Runs on `git push` (thorough checks: tests, deep AI review)
+- `"both"` — Runs on both commit and push (critical security checks)
+
+**Lock directory options:**
+- `"auto"` — XDG_RUNTIME_DIR if available, else /tmp
+- `"local"` — .agent-lease/locks/ in project
+- `"xdg"` — XDG_RUNTIME_DIR/agent-lease/
+- `"/custom/path"` — Any absolute path
+
+**Environment variable overrides:**
+```bash
+export AGENT_LEASE_LOCK_DIR=/custom/locks
+export AGENT_LEASE_PROJECT=my-project
+export AGENT_LEASE_RUNNERS="build:npm run build,lint:npm run lint"
 ```
 
 ## Agent-Native Design: Built for AI-Assisted Development
@@ -309,8 +428,35 @@ Edit `.agent-lease.config.js` with your validators.
 ```bash
 git add .
 git commit -m "Add feature"  # creates lock, blocks
-npx agent-lease release --audit-proof  # validates, releases
+npx agent-lease release --audit-proof  # runs commit-phase runners, releases
 git commit -m "Add feature"  # succeeds with proof
+git push  # creates lock, blocks (if push runners configured)
+npx agent-lease release --audit-proof --phase push  # runs push-phase runners
+git push  # succeeds
+```
+
+**With agentic runners:**
+```bash
+# Configure Claude review
+cat > .agent-lease.json <<'EOF'
+{
+  "runners": [
+    { "name": "build", "command": "npm run build", "on": "commit" },
+    { "name": "haiku", "command": "claude -p 'Quick bug check: {{diff}}'", "on": "commit" },
+    { "name": "opus", "command": "claude --model opus -p 'Deep review: {{diff}}'", "on": "push" }
+  ]
+}
+EOF
+
+# Commit with AI review
+git commit -m "Add feature"  # blocked
+npx agent-lease release --audit-proof  # build + haiku review
+git commit -m "Add feature"  # succeeds
+
+# Push with deep AI review
+git push  # blocked
+npx agent-lease release --audit-proof --phase push  # opus review
+git push  # succeeds
 ```
 
 **Contribute:**

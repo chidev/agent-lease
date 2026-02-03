@@ -80,16 +80,52 @@ YOU: "Committing changes..."
 
 [First attempt hits lock]
 
-YOU: "Agent-lease lock detected. Running required validation gates..."
+YOU: "Agent-lease lock detected. Running commit-phase runners..."
 
 [Run validation]
 $ npx agent-lease release --audit-proof
 
-YOU: "✅ Validation passed (TypeScript build + ESLint). Committing now..."
+YOU: "✅ Validation passed:
+  ✅ build: npm run build (2.3s)
+  ✅ haiku-review: claude quick check (3.1s)
+
+Committing now..."
 
 [Second attempt succeeds]
 
 YOU: "Committed successfully with validation proof."
+```
+
+### Scenario 1b: User Asks You to Push
+
+**Push-phase runners are separate:**
+
+```
+USER: "Push this to main"
+
+YOU: "Pushing changes..."
+
+[First attempt hits lock]
+
+YOU: "Agent-lease lock detected. Running push-phase runners (this may take longer)..."
+
+[Run push validation]
+$ npx agent-lease release --audit-proof --phase push
+
+YOU: "✅ Push validation passed:
+  ✅ test: npm test (8.2s)
+  ✅ opus-review: claude deep review (12.4s)
+
+Review summary from opus:
+- Auth logic looks correct
+- Properly handles edge cases
+- Suggests adding error boundary for user input
+
+Pushing now..."
+
+[Second attempt succeeds]
+
+YOU: "Pushed successfully with validation proof."
 ```
 
 ### Scenario 2: Lock Already Exists
@@ -240,117 +276,205 @@ Present a proposal:
 ### Installation Commands
 
 ```bash
-# Install package
+# Install package (global or per-project)
+npm install -g agent-lease
+# OR
 npm install --save-dev agent-lease
 
 # Initialize (creates config + installs hook)
 npx agent-lease init
 
-# Configure validators
-cat > .agent-lease.config.js <<'EOF'
-module.exports = {
-  validators: [
-    {
-      name: 'TypeScript Build',
-      command: 'tsc --noEmit',
-      required: true
-    },
-    {
-      name: 'ESLint',
-      command: 'eslint src/',
-      required: true
-    }
+# Configure runners (v2 format)
+cat > .agent-lease.json <<'EOF'
+{
+  "runners": [
+    { "name": "build", "command": "tsc --noEmit", "on": "commit" },
+    { "name": "lint", "command": "eslint src/", "on": "commit" },
+    { "name": "haiku", "command": "claude -p 'Quick check: {{diff}}'", "on": "commit" },
+    { "name": "test", "command": "npm test", "on": "push" }
   ],
-  bypass: {
-    branches: ['wip/*']
-  }
-};
+  "lockDir": "auto"
+}
 EOF
 
-# Test it
+# Test commit phase
 git add .
 git commit -m "Test agent-lease setup"  # Should create lock and block
-npx agent-lease release --audit-proof   # Should validate and release
+npx agent-lease release --audit-proof   # Should run build + lint + haiku
 git commit -m "Test agent-lease setup"  # Should succeed
+
+# Test push phase (if push runners configured)
+git push  # Should create lock and block
+npx agent-lease release --audit-proof --phase push  # Should run tests
+git push  # Should succeed
+```
+
+### Agentic Runner Examples
+
+**Claude with different models:**
+```json
+{
+  "runners": [
+    { "name": "haiku-commit", "command": "claude -p 'Quick bug check: {{diff}}'", "on": "commit" },
+    { "name": "opus-push", "command": "claude --model opus -p 'Deep security review: {{diff}}'", "on": "push" }
+  ]
+}
+```
+
+**Codex:**
+```json
+{
+  "runners": [
+    { "name": "codex-review", "command": "codex -q 'Check for issues in {{files}}: {{diff}}'", "on": "commit" }
+  ]
+}
+```
+
+**Local Ollama:**
+```json
+{
+  "runners": [
+    { "name": "llama-review", "command": "ollama run llama3 'Review this code: {{diff}}'", "on": "commit" }
+  ]
+}
+```
+
+**Contextual prompts:**
+```json
+{
+  "runners": [
+    {
+      "name": "contextual-review",
+      "command": "claude -p 'Review {{project}} on branch {{branch}}, files changed: {{files}}. Diff: {{diff}}'",
+      "on": "push"
+    }
+  ]
+}
 ```
 
 ---
 
-## Configuration: Understanding .agent-lease.config.js
+## Configuration: Understanding .agent-lease.json
 
 ### Basic Structure
 
-```javascript
-module.exports = {
-  // Validation commands to run
-  validators: [
+```json
+{
+  "runners": [
     {
-      name: 'Validator Name',      // Human-readable label
-      command: 'command to run',   // Shell command
-      required: true               // Block if fails?
+      "name": "Runner Name",
+      "command": "command to run",
+      "on": "commit",
+      "env": {}
     }
   ],
-
-  // Bypass rules (optional)
-  bypass: {
-    branches: ['wip/*', 'draft/*'], // Regex patterns
-    message: '[skip-lease]',        // Commit message flag
-    env: 'CI'                       // Skip in CI (already validated)
-  },
-
-  // Audit trail settings (optional)
-  audit: {
-    enabled: true,
-    path: '.agent-lease/audit-trail'
-  }
-};
+  "lockDir": "auto",
+  "projectName": "my-project"
+}
 ```
 
-### Common Validator Patterns
+**Fields:**
+- `name` — Human-readable label for the runner
+- `command` — Shell command to execute (can use template variables)
+- `on` — When to run: `"commit"`, `"push"`, or `"both"`
+- `env` — Extra environment variables (optional)
+
+### Template Variables
+
+Use these in command strings:
+
+| Variable | Value | Example |
+|----------|-------|---------|
+| `{{diff}}` | `git diff --cached` (commit) or `git diff origin..HEAD` (push) | Full diff text |
+| `{{files}}` | Space-separated list of changed files | `src/auth.ts src/user.ts` |
+| `{{project}}` | Project name from package.json or dir name | `my-app` |
+| `{{branch}}` | Current git branch | `feature/add-auth` |
+| `{{hash}}` | Current commit hash (short) | `a1b2c3d` |
+
+### Common Runner Patterns
 
 **TypeScript:**
-```javascript
+```json
 {
-  name: 'TypeScript Build',
-  command: 'tsc --noEmit',
-  required: true
+  "name": "TypeScript Build",
+  "command": "tsc --noEmit",
+  "on": "commit"
 }
 ```
 
 **ESLint:**
-```javascript
+```json
 {
-  name: 'ESLint',
-  command: 'eslint src/ --max-warnings 0',
-  required: true
+  "name": "ESLint",
+  "command": "eslint src/ --max-warnings 0",
+  "on": "commit"
 }
 ```
 
 **Prettier:**
-```javascript
+```json
 {
-  name: 'Prettier',
-  command: 'prettier --check "src/**/*.{ts,tsx,js,jsx}"',
-  required: true
+  "name": "Prettier",
+  "command": "prettier --check \"src/**/*.{ts,tsx,js,jsx}\"",
+  "on": "commit"
 }
 ```
 
-**Unit Tests:**
-```javascript
+**Unit Tests (push-phase):**
+```json
 {
-  name: 'Unit Tests',
-  command: 'npm test -- --coverage --passWithNoTests',
-  required: false  // Optional, can be slow
+  "name": "Unit Tests",
+  "command": "npm test -- --coverage --passWithNoTests",
+  "on": "push"
+}
+```
+
+**AI Review (agentic):**
+```json
+{
+  "name": "Claude Review",
+  "command": "claude -p 'Review for bugs and security: {{diff}}'",
+  "on": "commit"
 }
 ```
 
 **Custom Scripts:**
-```javascript
+```json
 {
-  name: 'Check Bundle Size',
-  command: 'npm run build && node scripts/check-bundle-size.js',
-  required: true
+  "name": "Check Bundle Size",
+  "command": "npm run build && node scripts/check-bundle-size.js",
+  "on": "push"
 }
+```
+
+### Lock Directory Options
+
+```json
+{
+  "lockDir": "auto"
+}
+```
+
+| Value | Location | Use Case |
+|-------|----------|----------|
+| `"auto"` | XDG_RUNTIME_DIR or /tmp | Default, respects XDG |
+| `"local"` | `.agent-lease/locks/` | Project-local locks |
+| `"xdg"` | `$XDG_RUNTIME_DIR/agent-lease/` | Explicit XDG |
+| `"/custom/path"` | Any absolute path | Custom location |
+
+### Environment Variable Overrides
+
+Override any config at runtime:
+
+```bash
+# Override lock directory
+export AGENT_LEASE_LOCK_DIR=/custom/locks
+
+# Override project name
+export AGENT_LEASE_PROJECT=my-project
+
+# Override runners entirely
+export AGENT_LEASE_RUNNERS="build:npm run build,lint:npm run lint"
 ```
 
 ---
@@ -382,29 +506,42 @@ npx agent-lease release --audit-proof
 
 **Solutions:**
 
-1. **Run only required validators:**
-```javascript
-validators: [
-  { name: 'TypeScript', command: 'tsc --noEmit', required: true },
-  { name: 'Tests', command: 'npm test', required: false }  // Optional
-]
+1. **Use phase separation (commit vs push):**
+```json
+{
+  "runners": [
+    { "name": "build", "command": "tsc --noEmit", "on": "commit" },
+    { "name": "test", "command": "npm test", "on": "push" }
+  ]
+}
 ```
+Fast checks on commit, slow checks on push.
 
 2. **Incremental validation:**
-```javascript
+```json
 {
-  name: 'TypeScript (changed files)',
-  command: 'tsc --noEmit $(git diff --cached --name-only --diff-filter=ACM "*.ts" "*.tsx")',
-  required: true
+  "name": "TypeScript (changed files)",
+  "command": "tsc --noEmit $(git diff --cached --name-only --diff-filter=ACM '*.ts' '*.tsx')",
+  "on": "commit"
 }
 ```
 
 3. **Parallel validation:**
-```javascript
+```json
 {
-  name: 'All Checks',
-  command: 'npm run lint & npm run type-check & wait',
-  required: true
+  "name": "All Checks",
+  "command": "npm run lint & npm run type-check & wait",
+  "on": "commit"
+}
+```
+
+4. **Use smaller AI models on commit:**
+```json
+{
+  "runners": [
+    { "name": "haiku", "command": "claude -p 'Quick check: {{diff}}'", "on": "commit" },
+    { "name": "opus", "command": "claude --model opus -p 'Deep check: {{diff}}'", "on": "push" }
+  ]
 }
 ```
 
@@ -412,22 +549,25 @@ validators: [
 
 **Temporary bypass:**
 ```bash
-# Option 1: Use bypass message
-git commit -m "[skip-lease] Emergency fix for prod outage"
-
-# Option 2: Remove lock (not recommended)
-rm .agent-lease.json
+# Remove lock file (use sparingly)
+rm ~/.agent-lease-locks/my-project.lock  # Or wherever locks are stored
 git commit
-# Re-enable after: git commit (creates new lock)
+
+# Note: v2 doesn't have built-in bypass flags
+# The lock/lease pattern is intentionally strict
+# If you need bypass, you must remove the lock manually
 ```
 
-**Permanent bypass for branch:**
-```javascript
-// .agent-lease.config.js
-bypass: {
-  branches: ['hotfix/*', 'emergency/*']
+**Better approach: Configure lighter runners for emergency branches:**
+```json
+{
+  "runners": [
+    { "name": "build", "command": "tsc --noEmit", "on": "commit" }
+  ]
 }
 ```
+
+Reduce runners to minimum viable checks, rather than bypassing entirely.
 
 ---
 
