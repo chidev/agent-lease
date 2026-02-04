@@ -592,6 +592,108 @@ function test_multiple_topics_independent() {
   agentLease('clear');
 }
 
+function test_template_vars_topic_aware() {
+  log('\nTest: template variables are topic-aware (files/diff for commit vs push)');
+
+  const leaseDir = path.join(testDir, '.agent-lease');
+  if (!fs.existsSync(leaseDir)) fs.mkdirSync(leaseDir, { recursive: true });
+
+  // Use the config and runner modules directly to test interpolation
+  const { interpolateTemplate, loadConfigChain } = require(path.join(__dirname, '..', 'lib', 'config'));
+  const { getGitContext } = require(path.join(__dirname, '..', 'lib', 'runner'));
+
+  // Create a commit so we have HEAD
+  stageFile('tvar-base');
+  run('git commit --no-verify -m "base for template vars"');
+
+  // Create a remote to enable push diff
+  run('git remote add origin . 2>/dev/null || true');
+  run('git branch -M main');
+
+  // Stage a new file (this will appear in commit diff)
+  stageFile('tvar-staged', 'staged-content');
+
+  // Create another committed file (will appear in push diff)
+  stageFile('tvar-pushed');
+  run('git commit --no-verify -m "pushed file"');
+
+  // Re-stage a file for the commit context
+  stageFile('tvar-staged2', 'staged2-content');
+
+  const context = getGitContext();
+
+  // Verify context has both commit and push data
+  if (!context.files) {
+    return fail('context.files should have staged files', JSON.stringify(context));
+  }
+  if (!context.branch) {
+    return fail('context.branch should be populated', JSON.stringify(context));
+  }
+  if (!context.hash || context.hash === 'new') {
+    return fail('context.hash should be populated', JSON.stringify(context));
+  }
+
+  // Template with all vars
+  const tmpl = 'FILES:{{files}} BRANCH:{{branch}} HASH:{{hash}} TOPIC:{{topic}} ARGS:{{args}} ENV:{{env:TVAR_TEST}}';
+
+  // Test commit topic
+  const commitResult = interpolateTemplate(tmpl, context,
+    { _runners: [], projectName: 'tvar-proj' },
+    { topic: 'pre-commit', args: ['--verbose'] }
+  );
+
+  if (!commitResult.includes('TOPIC:pre-commit')) {
+    return fail('commit: topic should be pre-commit', commitResult);
+  }
+  if (!commitResult.includes('ARGS:--verbose')) {
+    return fail('commit: args should be --verbose', commitResult);
+  }
+  if (!commitResult.includes('BRANCH:main')) {
+    return fail('commit: branch should be main', commitResult);
+  }
+  if (commitResult.includes('HASH:new')) {
+    return fail('commit: hash should not be "new"', commitResult);
+  }
+  // Commit files should include staged file
+  if (!commitResult.includes('tvar-staged2')) {
+    return fail('commit: files should include staged file', commitResult);
+  }
+
+  // Test push topic - should use filesPush/diffPush
+  const pushResult = interpolateTemplate(tmpl, context,
+    { _runners: [], projectName: 'tvar-proj' },
+    { topic: 'pre-push', args: ['origin', 'main'] }
+  );
+
+  if (!pushResult.includes('TOPIC:pre-push')) {
+    return fail('push: topic should be pre-push', pushResult);
+  }
+  if (!pushResult.includes('ARGS:origin main')) {
+    return fail('push: args should be "origin main"', pushResult);
+  }
+
+  // Test env var expansion
+  process.env.TVAR_TEST = 'hello-env';
+  const envResult = interpolateTemplate(tmpl, context,
+    { _runners: [], projectName: 'tvar-proj' },
+    { topic: 'test' }
+  );
+  if (!envResult.includes('ENV:hello-env')) {
+    return fail('env var should expand', envResult);
+  }
+  delete process.env.TVAR_TEST;
+
+  // Nonexistent env var should expand to empty
+  const emptyEnv = interpolateTemplate('{{env:DOES_NOT_EXIST_XYZ}}', context,
+    { _runners: [], projectName: 'test' }, {});
+  if (emptyEnv !== '') {
+    return fail('nonexistent env var should be empty', emptyEnv);
+  }
+
+  pass('all template variables are topic-aware');
+  run('git commit --no-verify -m "cleanup tvar" 2>/dev/null || true');
+}
+
 // ============ MAIN ============
 
 function main() {
@@ -613,6 +715,7 @@ function main() {
     test_all_known_git_hooks();
     test_lock_naming_includes_topic();
     test_multiple_topics_independent();
+    test_template_vars_topic_aware();
 
     log('\n' + '='.repeat(60));
     log(`\n  Results: ${passed} passed, ${failed} failed\n`);

@@ -1,6 +1,6 @@
 {
   "name": "agent-lease",
-  "version": "3.3.0",
+  "version": "0.1.2",
   "description": "Git hooks that FORCE validation before commits via lock/lease pattern. No broken code reaches CI.",
   "main": "lib/lock-manager.js",
   "bin": {
